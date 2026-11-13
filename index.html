@@ -33,7 +33,9 @@
       border-radius: 8px;
     }
 
-    input { border: 1px solid #ccc; }
+    input {
+      border: 1px solid #ccc;
+    }
 
     button {
       background: #06c755;
@@ -42,7 +44,9 @@
       cursor: pointer;
     }
 
-    button:disabled { opacity: .6; }
+    button:disabled {
+      background: #999;
+    }
 
     #status {
       margin-top: 20px;
@@ -52,33 +56,37 @@
 </head>
 
 <body>
-  <div class="container">
-    <h2>RFI Inspector</h2>
-    <p>ลงทะเบียน LINE เพื่อรับการแจ้งเตือนงานตรวจสอบ</p>
+<div class="container">
 
-    <input
-      type="text"
-      id="registerCode"
-      placeholder="กรอก Registration Code"
-      autocomplete="off"
-    >
+  <h2>RFI Inspector</h2>
 
-    <button id="registerButton" onclick="registerLINE()">
-      ลงทะเบียน LINE
-    </button>
+  <p>ลงทะเบียน LINE เพื่อรับการแจ้งเตือนงานตรวจสอบ</p>
 
-    <div id="status">กรุณากรอกรหัสลงทะเบียน</div>
-  </div>
+  <input
+    type="text"
+    id="registerCode"
+    placeholder="กรอก Registration Code"
+    autocomplete="off"
+  >
+
+  <button id="registerButton" onclick="registerLINE()">
+    ลงทะเบียน LINE
+  </button>
+
+  <div id="status">กรุณากรอกรหัสลงทะเบียน</div>
+
+</div>
 
 <script>
 const LIFF_ID = "2012539357-Su5OjDcV";
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbxEUBQBW5a8OBQEkzJ8sejgsermjnMjxM8PqNabIE_1bBEdM8Ahgw7KtrWZzNnBDjj-vg/exec";
+const GAS_URL =
+  "https://script.google.com/macros/s/AKfycbxEUBQBW5a8OBQEkzJ8sejgsermjnMjxM8PqNabIE_1bBEdM8Ahgw7KtrWZzNnBDjj-vg/exec";
 
 async function registerLINE() {
+
   const status = document.getElementById("status");
   const button = document.getElementById("registerButton");
-
   const registerCode =
     document.getElementById("registerCode").value.trim();
 
@@ -90,12 +98,21 @@ async function registerLINE() {
   button.disabled = true;
 
   try {
+
     status.innerText = "กำลังเชื่อมต่อ LINE...";
 
-    await liff.init({ liffId: LIFF_ID });
+    await liff.init({
+      liffId: LIFF_ID
+    });
 
     if (!liff.isLoggedIn()) {
-      liff.login();
+
+      sessionStorage.setItem("RFI_RegisterCode", registerCode);
+
+      liff.login({
+        redirectUri: window.location.href
+      });
+
       return;
     }
 
@@ -103,52 +120,111 @@ async function registerLINE() {
 
     const profile = await liff.getProfile();
 
-    status.innerText = "กำลังบันทึกข้อมูล...";
+    status.innerText =
+      "กำลังบันทึกข้อมูล Inspector...";
+
+    const result = await callGoogleScript(
+      profile.userId,
+      profile.displayName,
+      registerCode
+    );
+
+    if (result.success) {
+
+      status.innerText = result.message;
+
+      document.getElementById("registerCode").value = "";
+
+      sessionStorage.removeItem("RFI_RegisterCode");
+
+    } else {
+
+      throw new Error(result.message);
+    }
+
+  } catch (error) {
+
+    status.innerText =
+      "ลงทะเบียนไม่สำเร็จ\n" + error.message;
+
+  } finally {
+
+    button.disabled = false;
+  }
+}
+
+function callGoogleScript(userId, displayName, registerCode) {
+
+  return new Promise((resolve, reject) => {
 
     const callbackName =
-      "lineRegisterCallback_" + Date.now();
-
-    const params = new URLSearchParams({
-      action: "register",
-      userId: profile.userId,
-      displayName: profile.displayName,
-      registerCode: registerCode,
-      callback: callbackName
-    });
+      "rfiCallback_" + Date.now();
 
     const script = document.createElement("script");
 
-    window[callbackName] = function(result) {
-      delete window[callbackName];
-      script.remove();
-      button.disabled = false;
+    const params = new URLSearchParams({
+      action: "register",
+      callback: callbackName,
+      userId: userId,
+      displayName: displayName,
+      registerCode: registerCode
+    });
 
-      if (result.success) {
-        status.innerText = result.message;
-        document.getElementById("registerCode").value = "";
-      } else {
-        status.innerText = "ลงทะเบียนไม่สำเร็จ\n" + result.message;
-      }
+    const timeout = setTimeout(() => {
+
+      cleanup();
+
+      reject(new Error(
+        "Google Apps Script ไม่ตอบกลับภายใน 30 วินาที"
+      ));
+
+    }, 30000);
+
+    function cleanup() {
+
+      clearTimeout(timeout);
+
+      delete window[callbackName];
+
+      script.remove();
+    }
+
+    window[callbackName] = function(result) {
+
+      cleanup();
+
+      resolve(result);
     };
 
     script.onerror = function() {
-      delete window[callbackName];
-      script.remove();
-      button.disabled = false;
-      status.innerText =
-        "ไม่สามารถติดต่อ Google Apps Script ได้";
+
+      cleanup();
+
+      reject(new Error(
+        "ไม่สามารถเชื่อมต่อ Google Apps Script ได้"
+      ));
     };
 
     script.src = GAS_URL + "?" + params.toString();
 
     document.body.appendChild(script);
 
-  } catch (error) {
-    button.disabled = false;
-    status.innerText =
-      "เกิดข้อผิดพลาด\n" + error.message;
-  }
+  });
 }
+
+// เรียกคืน Registration Code หลังจาก LINE Login
+window.addEventListener("load", function() {
+
+  const savedCode =
+    sessionStorage.getItem("RFI_RegisterCode");
+
+  if (savedCode) {
+    document.getElementById("registerCode").value =
+      savedCode;
+  }
+
+});
 </script>
+
 </body>
 </html>
